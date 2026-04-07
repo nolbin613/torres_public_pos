@@ -77,7 +77,7 @@ app.get('/', (req, res) => {
     <body>
 
     <header>
-      <img src="/images/logo.png"/>
+      <img src="/images/logo.jpg"/>
       <a href="/admin"><button class="btn">Admin / POS</button></a>
     </header>
 
