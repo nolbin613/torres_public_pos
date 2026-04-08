@@ -395,7 +395,7 @@ footer{max-width:1220px; margin:28px auto 42px; padding:0 18px}
       <span>I confirm that I am at least 21 years old and legally permitted to purchase tobacco products.</span>
     </label>
 
-    <div id="cash-app-pay"></div>
+    
     <div id="card-container"></div>
 
     <button class="btn" id="payCardButton">Pay by Card</button>
@@ -691,7 +691,34 @@ document.getElementById("payCardButton").addEventListener("click", async () => {
     renderCart();
 
     squareConfig = await loadSquareConfig();
-    payments = window.Square.payments(squareConfig.appId, squareConfig.locationId);
+    (async function init() {
+  try {
+    renderProducts();
+    renderCart();
+
+    squareConfig = await loadSquareConfig();
+    console.log("Square config:", squareConfig);
+
+    if (!squareConfig.appId || !squareConfig.locationId) {
+      throw new Error("Missing Square appId or locationId.");
+    }
+
+    if (!window.Square) {
+      throw new Error("Square SDK did not load.");
+    }
+
+    payments = window.Square.payments(
+      String(squareConfig.appId).trim(),
+      String(squareConfig.locationId).trim()
+    );
+
+    await initializeCard();
+   // await refreshCashApp();
+  } catch (err) {
+    console.error(err);
+    setStatus(err.message || "Checkout initialization failed.");
+  }
+})();
 
     await initializeCard();
     await refreshCashApp();
