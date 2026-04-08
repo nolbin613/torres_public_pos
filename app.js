@@ -48,6 +48,7 @@ async function squareRequest(path, options = {}) {
     headers: {
       Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
       "Content-Type": "application/json",
+      "Square-Version": "2025-09-24",
       ...(options.headers || {})
     },
     body: options.body
@@ -99,13 +100,13 @@ app.get("/api/config", async (_req, res) => {
 
     const locationId = await getLocationId();
 
-    res.json({
-      appId: SQUARE_APP_ID,
-      locationId,
+    return res.json({
+      appId: String(SQUARE_APP_ID).trim(),
+      locationId: String(locationId).trim(),
       env: SQUARE_ENV
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message || "Config error." });
   }
 });
 
@@ -140,21 +141,21 @@ app.post("/api/payments", async (req, res) => {
       note: "Torres Cigars website order"
     };
 
-    if (customer?.email) {
-      payload.buyer_email_address = customer.email;
-    }
+    if (customer?.email) payload.buyer_email_address = customer.email;
 
     const payment = await squareRequest("/v2/payments", {
       method: "POST",
       body: JSON.stringify(payload)
     });
 
-    res.json({
+    return res.json({
       success: true,
       payment
     });
   } catch (err) {
-    res.status(500).json({ error: err.message || "Payment failed." });
+    return res.status(500).json({
+      error: err.message || "Payment failed."
+    });
   }
 });
 
@@ -271,9 +272,6 @@ h2{color:var(--gold); margin-top:0; margin-bottom:16px}
 .age-check input{margin-top:4px; transform:scale(1.2)}
 #card-container{
   min-height:90px; background:#fff; border-radius:12px; padding:12px;
-}
-#cash-app-pay{
-  min-height:54px;
 }
 footer{max-width:1220px; margin:28px auto 42px; padding:0 18px}
 .age-gate{
@@ -395,7 +393,6 @@ footer{max-width:1220px; margin:28px auto 42px; padding:0 18px}
       <span>I confirm that I am at least 21 years old and legally permitted to purchase tobacco products.</span>
     </label>
 
-    
     <div id="card-container"></div>
 
     <button class="btn" id="payCardButton">Pay by Card</button>
@@ -404,7 +401,7 @@ footer{max-width:1220px; margin:28px auto 42px; padding:0 18px}
     <div id="paymentStatus" class="status"></div>
 
     <div class="notice">
-      Payment is processed securely through Square. Cash App Pay appears when available.
+      Payment is processed securely through Square.
     </div>
   </div>
 </div>
@@ -426,7 +423,7 @@ let cart = JSON.parse(localStorage.getItem("torresCart") || "[]");
 let squareConfig = null;
 let payments = null;
 let card = null;
-let cashAppPay = null;
+let cardReady = false;
 
 function currentTotal() {
   return cart.reduce((sum, item) => {
@@ -466,7 +463,6 @@ function addToCart(id) {
   else cart.push({ id, qty: 1 });
   saveCart();
   renderCart();
-  refreshCashApp();
   openCart();
 }
 
@@ -525,14 +521,12 @@ function changeQty(id, delta) {
   }
   saveCart();
   renderCart();
-  refreshCashApp();
 }
 
 function clearCart() {
   cart = [];
   saveCart();
   renderCart();
-  refreshCashApp();
 }
 
 function openCart() {
@@ -561,6 +555,10 @@ function leaveSite() {
   }
 })();
 
+function setStatus(message) {
+  document.getElementById("paymentStatus").textContent = message || "";
+}
+
 async function loadSquareConfig() {
   const res = await fetch("/api/config");
   const data = await res.json();
@@ -568,60 +566,34 @@ async function loadSquareConfig() {
   return data;
 }
 
-function buildPaymentRequest() {
-  return payments.paymentRequest({
-    countryCode: "US",
-    currencyCode: "USD",
-    total: {
-      amount: currentTotal().toFixed(2),
-      label: "Total"
-    }
-  });
-}
-
 async function initializeCard() {
-  card = await payments.card();
-  await card.attach("#card-container");
-}
-
-async function refreshCashApp() {
-  const container = document.getElementById("cash-app-pay");
-  container.innerHTML = "";
-
-  if (!payments || currentTotal() <= 0) return;
-
   try {
-    const paymentRequest = buildPaymentRequest();
-    cashAppPay = await payments.cashAppPay(paymentRequest, {
-      redirectURL: window.location.origin + "/",
-      referenceId: "torres-" + Date.now()
-    });
-
-    await cashAppPay.attach("#cash-app-pay");
-
-    cashAppPay.addEventListener("ontokenization", async function (event) {
-      const { tokenResult, error } = event.detail || {};
-      if (error) {
-        setStatus("Cash App tokenization failed.");
-        return;
-      }
-      if (tokenResult && tokenResult.status === "OK") {
-        await submitPayment(tokenResult.token);
-      }
-    });
+    setStatus("Loading secure payment form...");
+    card = await payments.card();
+    await card.attach("#card-container");
+    cardReady = true;
+    setStatus("Card form ready.");
   } catch (err) {
-    console.warn("Cash App Pay not available:", err);
+    cardReady = false;
+    card = null;
+    console.error("Card init error:", err);
+    setStatus("Card form failed to load.");
+    throw err;
   }
 }
 
-function setStatus(message) {
-  document.getElementById("paymentStatus").textContent = message || "";
-}
-
 async function tokenizeCard() {
+  if (!cardReady || !card) {
+    throw new Error("Card form is not ready yet.");
+  }
+
   const result = await card.tokenize();
   if (result.status === "OK") return result.token;
-  throw new Error("Card details could not be tokenized.");
+
+  const message =
+    result?.errors?.[0]?.message ||
+    "Card details could not be tokenized.";
+  throw new Error(message);
 }
 
 function getCustomerPayload() {
@@ -671,27 +643,26 @@ async function submitPayment(sourceId) {
   cart = [];
   saveCart();
   renderCart();
-  refreshCashApp();
   setTimeout(() => closeCart(), 1200);
 }
 
 document.getElementById("payCardButton").addEventListener("click", async () => {
   try {
     if (!validateCheckout()) return;
+    if (!cardReady || !card) {
+      setStatus("Card form is still loading or failed to load.");
+      return;
+    }
+
     const token = await tokenizeCard();
     await submitPayment(token);
   } catch (err) {
+    console.error("Payment error:", err);
     setStatus(err.message || "Payment error.");
   }
 });
 
 (async function init() {
-  try {
-    renderProducts();
-    renderCart();
-
-    squareConfig = await loadSquareConfig();
-    (async function init() {
   try {
     renderProducts();
     renderCart();
@@ -707,22 +678,16 @@ document.getElementById("payCardButton").addEventListener("click", async () => {
       throw new Error("Square SDK did not load.");
     }
 
-    payments = window.Square.payments(
-      String(squareConfig.appId).trim(),
-      String(squareConfig.locationId).trim()
-    );
+    const appId = String(squareConfig.appId).trim();
+    const locationId = String(squareConfig.locationId).trim();
+
+    payments = window.Square.payments(appId, locationId);
 
     await initializeCard();
-   // await refreshCashApp();
-  } catch (err) {
-    console.error(err);
-    setStatus(err.message || "Checkout initialization failed.");
-  }
-})();
 
-    await initializeCard();
-    await refreshCashApp();
+    setStatus("Checkout ready.");
   } catch (err) {
+    console.error("Init error:", err);
     setStatus(err.message || "Checkout initialization failed.");
   }
 })();
